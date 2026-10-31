@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#05070b] text-zinc-200 antialiased font-sans select-none overflow-x-hidden;
+    background-color: #05070b;
+    color: #e2e8f0;
+  }
+}
+
+/* Custom cyber scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(10, 14, 23, 0.7);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Leaflet Dark mode overrides */
+.leaflet-container {
+  background-color: #05070b !important;
+  font-family: inherit;
+}
+.leaflet-popup-content-wrapper {
+  background: #090d16 !important;
+  color: #f1f5f9 !important;
+  border: 1px solid #1e293b !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.8) !important;
+  padding: 0 !important;
+}
+.leaflet-popup-tip {
+  background: #090d16 !important;
+  border: 1px solid #1e293b !important;
+}
+.leaflet-popup-content {
+  margin: 0 !important;
+  line-height: inherit !important;
+}
+.leaflet-container a.leaflet-popup-close-button {
+  color: #94a3b8 !important;
+  padding: 6px 6px 0 0 !important;
+}
+.leaflet-container a.leaflet-popup-close-button:hover {
+  color: #f43f5e !important;
+}
+
+/* Custom glow utility classes */
+.glow-emerald {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.35);
+}
+.glow-crimson {
+  box-shadow: 0 0 20px rgba(244, 63, 94, 0.5);
+}
+.glow-amber {
+  box-shadow: 0 0 15px rgba(245, 158, 11, 0.35);
+}
+
+/* OpenStreetMap Dark Cyber Filter */
+.osm-dark-tiles {
+  filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(110%);
+}

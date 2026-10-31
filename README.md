@@ -78,21 +78,55 @@ $$H(X) = -\sum_{i=0}^{255} P(x_i) \log_2 P(x_i) \approx 7.98 \text{ bits/byte} \
 
 ---
 
-## 3. The 3-Panel Interactive Dashboard
+## 3. The 3-Panel Interactive Dashboard & MITM Workbench
 
 ```
 ┌─────────────────────────────────┬─────────────────────────────────┬─────────────────────────────────┐
 │     PANEL 1: IOT EDGE DEVICE    │  PANEL 2: UNTRUSTED RELAY STREAM│   PANEL 3: AUTHORIZED CONSIGNEE │
-│   (TransCrypt Smart-Seal HSM)   │     (Hacker Intercept View)     │       (Mumbai Port Ops)         │
+│   (TransCrypt Smart-Seal HSM)   │     (MITM Tamper Workbench)     │       (Mumbai Port Ops)         │
 ├─────────────────────────────────┼─────────────────────────────────┼─────────────────────────────────┤
-│ • Container Light Sensor (Lux)  │ • Live Intercept Stream         │ • Dark Leaflet Nautical Map     │
-│ • Cargo Temp (°C/°F Reefer)     │ • Raw Ciphertext Hex Stream     │ • 15 Nautical Waypoints         │
-│ • Battery Voltage & Discharge   │ • Shannon Entropy: 7.98 bits    │ • Real-Time Decrypted Metrics   │
-│ • Swell / Shock G-Force         │ • 16-Byte Hex / ASCII Viewer    │ • Multi-Layer Validation Ledger │
-│ • 6-Step Construction Pipeline  │ • Packet Search & JSON Inspector│ • Tamper Beacon / Emergency HUD │
-│ • AES-256 & ECDSA Key Inspector │ • Manual MITM Tamper Trigger    │ • Downloadable Audit Cert (JSON)│
+│ • Dual Modes: Manual Ping /     │ • Live Transit Workbench:       │ • Consignee Key Status Toggle:  │
+│   Live Cruise (3s Interval)     │   - Editable Ciphertext Textarea│   - Key Loaded (Authorized)     │
+│ • Interactive Sliders:          │   - 12-Byte Editable IV Input   │   - Key Revoked (Locked Enclave)│
+│   - Temp: -20°C to +40°C        │ • Corrupt Bit & Forward Button  │ • Dark Leaflet Nautical Map     │
+│   - Light: 0 to 1000 Lux        │ • Forward As-Is (Untampered)    │ • Click Map to Stage GPS Target │
+│   - Shock: 0.0G to 5.0G         │ • Inject Replay Block Button    │ • Live Incident Failure Card:   │
+│ • "Transmit Encrypted Packet"   │ • Shannon Entropy: 7.98 bits    │   - Expected vs Calc Hash Diff  │
+│ • 6-Step Construction Pipeline  │ • 16-Byte Hex / ASCII Viewer    │   - Integrity Error 0x4B2       │
+│ • AES-256 & ECDSA Key Inspector │ • Live Intercept Stream Log     │ • Filterable Incident Ledger    │
 └─────────────────────────────────┴─────────────────────────────────┴─────────────────────────────────┘
 ```
+
+### View Switcher (SOC Layouts)
+The navigation bar allows instant switching between 4 specialized layouts:
+- **Split SOC View (Tri-Panel)**: Side-by-side view of all three layers for real-time demonstration.
+- **IoT Edge Terminal**: Focused telemetry workbench with enlarged sensor sliders, GPS target staging, and enclave pipeline.
+- **Cloud Interceptor**: Full-width MITM tampering lab with raw hex editor, byte corruption triggers, and Shannon entropy analyzer.
+- **Consignee Portal**: Full-screen maritime operations room with nautical route map, key management handshake, and incident forensic audit.
+
+---
+
+## 4. Interactive MITM Tampering & Incident Response Workflow
+
+1. **Staging in Transit**:
+   - When a packet is transmitted from the IoT Edge, it arrives at the **Center Panel (MITM Workbench)** where it sits in flight.
+2. **Attacker Manipulation**:
+   - The user can view the raw hex in an editable textarea and either:
+     - Click **"Corrupt Bit & Forward"** to systematically flip payload bytes.
+     - Type custom hex modifications directly into the ciphertext or IV.
+     - Click **"Forward to Consignee"** to let authentic traffic pass through.
+3. **Consignee Cryptographic Enforcement**:
+   - If corrupted bytes arrive, SubtleCrypto's SHA-256 hash validation and AES-GCM AEAD tag check both fail.
+   - The Consignee displays a live alert card:
+     ```
+     CRYPTOGRAPHIC VERIFICATION FAILURE (Error 0x4B2)
+     Expected SHA-256: [Header Hash Hex]
+     Calculated SHA-256: [Payload Digest Hex]
+     Result: INTEGRITY FAILURE (Error 0x4B2) — Route rendering halted.
+     ```
+   - The security incident is timestamped and logged into the **Incident Ledger**.
+4. **Zero-Knowledge Key Revocation**:
+   - Clicking **"Revoke / Unload Key"** on the Consignee panel instantly simulates unauthorized access: map coordinates are masked with **"LOCKED: VALID SESSION KEY REQUIRED"**, and sensor HUDs show encrypted placeholders.
 
 ---
 

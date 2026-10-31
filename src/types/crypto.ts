@@ -3,12 +3,12 @@ export interface TelemetryData {
   timestamp: number;
   lat: number;
   lng: number;
-  temp: number; // in Celsius
-  lux: number;  // light level (normal sealed container: 0-5 lux)
+  temp: number; // in Celsius (-20 to +40)
+  lux: number;  // light level 0 to 1000
   battery: number; // percentage 0-100%
+  shockG: number; // G-force accelerometer 0.0 to 5.0
   humidity?: number; // %
   pressure?: number; // hPa
-  shockG?: number; // G-force accelerometer
   status?: string;
   waypointName?: string;
   doorSealed?: boolean;
@@ -25,6 +25,8 @@ export interface EncryptedPacket {
   tampered?: boolean;
   tamperReason?: string;
   isReplay?: boolean;
+  originalCiphertext?: string;
+  originalHash?: string;
 }
 
 export interface Waypoint {
@@ -43,11 +45,13 @@ export interface Waypoint {
 
 export type AttackType = 'none' | 'mitm' | 'replay' | 'physical';
 
+export type AppViewMode = 'split' | 'iot' | 'relay' | 'consignee';
+
 export interface ConsigneeLogEntry {
   id: string;
   seq: number;
   timestamp: number;
-  status: 'VERIFIED' | 'TAMPER_HASH_FAIL' | 'TAMPER_AEAD_FAIL' | 'REPLAY_DROPPED' | 'PHYSICAL_BREACH';
+  status: 'VERIFIED' | 'TAMPER_HASH_FAIL' | 'TAMPER_AEAD_FAIL' | 'REPLAY_DROPPED' | 'PHYSICAL_BREACH' | 'KEY_MISSING_LOCKED';
   prevHashMatch: boolean;
   currentHashMatch: boolean;
   aeadValid: boolean;
@@ -57,8 +61,10 @@ export interface ConsigneeLogEntry {
   receivedHash: string;
   calculatedHash: string;
   message: string;
+  errorCode?: string; // e.g. "Error 0x4B2"
   telemetry?: TelemetryData;
   processingTimeMs: number;
+  rawCiphertextSnippet?: string;
 }
 
 export interface CryptoKeysState {
@@ -69,15 +75,12 @@ export interface CryptoKeysState {
   deviceFingerprint: string;
 }
 
-export interface SimulationState {
-  currentWaypointIndex: number;
-  isPlaying: boolean;
-  speedMultiplier: number;
-  activeAttack: AttackType | null;
-  attackPending: AttackType | null;
-  soundEnabled: boolean;
-  genesisHash: string;
-  packetCount: number;
-  lastEmittedTime: number;
+export interface VerificationFailureDetails {
+  blockSeq: number;
+  expectedHash: string;
+  calculatedHash: string;
+  errorCode: string;
+  reason: string;
+  timestamp: number;
+  receivedCiphertext: string;
 }
-

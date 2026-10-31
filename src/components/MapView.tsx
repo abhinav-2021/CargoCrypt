@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { Waypoint } from '../types/crypto';
+import { Lock, Crosshair, MapPin } from 'lucide-react';
 
 interface MapViewProps {
   waypoints: Waypoint[];
@@ -10,6 +11,21 @@ interface MapViewProps {
   isBreached: boolean;
   breachType: string | null;
   currentCoords: { lat: number; lng: number } | null;
+  pendingTargetCoords?: { lat: number; lng: number } | null;
+  onSelectCoords?: (lat: number, lng: number) => void;
+  isConsigneeKeyLoaded?: boolean;
+}
+
+// Map Click Listener to pick custom GPS coordinate
+function MapClickDispatcher({ onSelectCoords }: { onSelectCoords?: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click(e) {
+      if (onSelectCoords) {
+        onSelectCoords(Number(e.latlng.lat.toFixed(4)), Number(e.latlng.lng.toFixed(4)));
+      }
+    },
+  });
+  return null;
 }
 
 // Controller component to auto-pan map smoothly to current waypoint
@@ -29,6 +45,9 @@ export const MapView: React.FC<MapViewProps> = ({
   isBreached,
   breachType,
   currentCoords,
+  pendingTargetCoords,
+  onSelectCoords,
+  isConsigneeKeyLoaded = true,
 }) => {
   const [basemap, setBasemap] = useState<BasemapStyle>('esriDark');
 
@@ -87,6 +106,24 @@ export const MapView: React.FC<MapViewProps> = ({
     });
   }, [isBreached, activePoint.heading]);
 
+  // Target Coordinate Marker (When user clicks map to stage next manual coordinate)
+  const targetIcon = useMemo(() => {
+    const html = `
+      <div class="relative flex items-center justify-center -translate-x-1/2 -translate-y-1/2" style="width: 32px; height: 32px;">
+        <div class="absolute inset-0 rounded-full animate-ping bg-amber-400 opacity-60"></div>
+        <div class="w-6 h-6 rounded-full bg-amber-500 border-2 border-black flex items-center justify-center text-black font-bold text-xs shadow-lg">
+          +
+        </div>
+      </div>
+    `;
+    return L.divIcon({
+      className: 'custom-target-icon',
+      html,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+    });
+  }, []);
+
   // Waypoint DivIcon builder
   const createWaypointIcon = (index: number, isPassed: boolean, isCurrent: boolean) => {
     let bgColor = '#1e293b'; // slate-800
@@ -104,8 +141,8 @@ export const MapView: React.FC<MapViewProps> = ({
     }
 
     const html = `
-      <div class="relative flex items-center justify-center -translate-x-1/2 -translate-y-1/2" style="width: 26px; height: 26px;">
-        <div class="w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shadow-md transition-all duration-300"
+      <div class="relative flex items-center justify-center -translate-x-1/2 -translate-y-1/2 cursor-pointer" style="width: 26px; height: 26px;">
+        <div class="w-6 h-6 rounded-full flex items-center justify-center font-mono text-[10px] font-bold shadow-md transition-all duration-300 hover:scale-125"
              style="background-color: ${bgColor}; border: 1.5px solid ${borderColor}; color: ${textColor};">
           ${index + 1}
         </div>
@@ -143,7 +180,6 @@ export const MapView: React.FC<MapViewProps> = ({
         />
       );
     }
-    // Default: ESRI World Dark Gray Canvas (Clean, dark, free, zero watermark)
     return (
       <TileLayer
         key="esriDark"
@@ -156,7 +192,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
   return (
     <div className="relative w-full h-full min-h-[340px] rounded-lg overflow-hidden border border-cyber-border bg-[#05070b]">
-      {/* Visual Nautical Grid Overlay & Basemap Selector */}
+      {/* Map Control Overlay */}
       <div className="absolute top-2 right-2 z-[400] flex flex-col gap-1 items-end">
         <div className="flex items-center gap-1 bg-zinc-950/90 backdrop-blur border border-zinc-800 p-0.5 rounded text-[9px] font-mono shadow-lg">
           <button
@@ -185,17 +221,36 @@ export const MapView: React.FC<MapViewProps> = ({
           </button>
         </div>
 
-        <div className="px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase bg-zinc-950/80 backdrop-blur border border-zinc-800 text-zinc-400 pointer-events-none">
-          AIS CLASS-A • 15 WAYPOINTS • SGP ➔ BOM
+        <div className="px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase bg-zinc-950/80 backdrop-blur border border-zinc-800 text-zinc-400 pointer-events-none flex items-center gap-1.5">
+          <Crosshair className="w-3 h-3 text-emerald-400" />
+          <span>Click Map to Set Manual GPS</span>
         </div>
 
-        {isBreached && (
+        {isBreached && isConsigneeKeyLoaded && (
           <div className="px-2.5 py-1 rounded text-[11px] font-mono font-bold tracking-wider uppercase bg-rose-950/90 border border-rose-500 text-rose-300 animate-pulse flex items-center gap-1.5 shadow-lg shadow-rose-950/50 pointer-events-none">
             <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
             ALERT: {breachType || 'BREACH DETECTED AT SEA'}
           </div>
         )}
       </div>
+
+      {/* Unauthorized View Overlay: If Consignee Key is Revoked */}
+      {!isConsigneeKeyLoaded && (
+        <div className="absolute inset-0 z-[500] bg-zinc-950/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-rose-950/70 border-2 border-rose-500 flex items-center justify-center text-rose-400 shadow-2xl shadow-rose-950/80 mb-3 animate-pulse">
+            <Lock className="w-7 h-7" />
+          </div>
+          <h3 className="text-base font-mono font-black text-rose-300 tracking-wider uppercase">
+            LOCKED: VALID SESSION KEY REQUIRED
+          </h3>
+          <p className="text-xs font-mono text-zinc-400 max-w-md mt-1.5 leading-relaxed">
+            Consignee AES-256 session key has been revoked. Real-time vessel coordinates, route polylines, and container health telemetry are mathematically masked by the zero-knowledge enclave.
+          </p>
+          <div className="mt-4 px-3 py-1.5 rounded bg-black/80 border border-zinc-800 text-[11px] font-mono text-zinc-500">
+            Raw Encrypted Stream Available in Center Relay
+          </div>
+        </div>
+      )}
 
       <MapContainer
         center={[activeLat, activeLng]}
@@ -205,8 +260,9 @@ export const MapView: React.FC<MapViewProps> = ({
         style={{ background: '#070a12' }}
       >
         <MapAutoPanner center={[activeLat, activeLng]} />
+        <MapClickDispatcher onSelectCoords={onSelectCoords} />
 
-        {/* Dynamic Basemap Layer without watermark */}
+        {/* Dynamic Basemap Layer */}
         {renderBasemap()}
 
         {/* Full planned maritime corridor (dim dotted) */}
@@ -221,14 +277,16 @@ export const MapView: React.FC<MapViewProps> = ({
         />
 
         {/* Traversed corridor (emerald or crimson) */}
-        <Polyline
-          positions={completedRouteCoords}
-          pathOptions={{
-            color: isBreached ? '#f43f5e' : '#10b981',
-            weight: 3.5,
-            opacity: 0.95,
-          }}
-        />
+        {isConsigneeKeyLoaded && (
+          <Polyline
+            positions={completedRouteCoords}
+            pathOptions={{
+              color: isBreached ? '#f43f5e' : '#10b981',
+              weight: 3.5,
+              opacity: 0.95,
+            }}
+          />
+        )}
 
         {/* 15 Waypoint Markers */}
         {waypoints.map((wp, idx) => {
@@ -240,6 +298,13 @@ export const MapView: React.FC<MapViewProps> = ({
               key={wp.id}
               position={[wp.lat, wp.lng]}
               icon={createWaypointIcon(idx, isPassed, isCurrent)}
+              eventHandlers={{
+                click: () => {
+                  if (onSelectCoords) {
+                    onSelectCoords(wp.lat, wp.lng);
+                  }
+                },
+              }}
             >
               <Popup className="dark-popup">
                 <div className="p-2 bg-zinc-950 text-zinc-100 rounded border border-zinc-800 font-mono text-xs max-w-[220px]">
@@ -250,10 +315,7 @@ export const MapView: React.FC<MapViewProps> = ({
                   <div className="text-[10px] text-zinc-300 mt-1">
                     Coords: {wp.lat.toFixed(4)}°N, {wp.lng.toFixed(4)}°E
                   </div>
-                  <div className="text-[10px] text-zinc-400">ETA: {wp.eta}</div>
-                  <p className="text-[9px] text-zinc-400 mt-1.5 border-t border-zinc-800 pt-1 leading-tight">
-                    {wp.description}
-                  </p>
+                  <div className="text-[10px] text-amber-400 mt-1">Click to select as Next GPS Target</div>
                 </div>
               </Popup>
             </Marker>
@@ -261,24 +323,34 @@ export const MapView: React.FC<MapViewProps> = ({
         })}
 
         {/* Active Vessel Indicator */}
-        <Marker position={[activeLat, activeLng]} icon={shipIcon} zIndexOffset={1000}>
-          <Popup>
-            <div className="p-2 bg-zinc-950 text-zinc-100 rounded border border-zinc-800 font-mono text-xs">
-              <div className="font-bold text-cyan-400 flex items-center justify-between border-b border-zinc-800 pb-1 mb-1">
-                <span>Vessel: MV MAERSK KRYPTOS</span>
+        {isConsigneeKeyLoaded && (
+          <Marker position={[activeLat, activeLng]} icon={shipIcon} zIndexOffset={1000}>
+            <Popup>
+              <div className="p-2 bg-zinc-950 text-zinc-100 rounded border border-zinc-800 font-mono text-xs">
+                <div className="font-bold text-cyan-400 flex items-center justify-between border-b border-zinc-800 pb-1 mb-1">
+                  <span>Vessel: MV MAERSK KRYPTOS</span>
+                </div>
+                <div className="text-[11px] text-zinc-300">
+                  Speed: {activePoint.speedKnots} kts • Head: {activePoint.heading}°
+                </div>
+                <div className="text-[10px] text-zinc-400 mt-1">
+                  Waypoint #{activePoint.id}: {activePoint.name}
+                </div>
               </div>
-              <div className="text-[11px] text-zinc-300">
-                Speed: {activePoint.speedKnots} kts • Head: {activePoint.heading}°
+            </Popup>
+          </Marker>
+        )}
+
+        {/* Pending User Selected Coordinate (Staged for next transmission) */}
+        {pendingTargetCoords && (
+          <Marker position={[pendingTargetCoords.lat, pendingTargetCoords.lng]} icon={targetIcon} zIndexOffset={1100}>
+            <Popup>
+              <div className="p-1.5 bg-zinc-950 text-amber-300 font-mono text-xs rounded border border-amber-500">
+                Staged GPS: {pendingTargetCoords.lat.toFixed(4)}°N, {pendingTargetCoords.lng.toFixed(4)}°E
               </div>
-              <div className="text-[10px] text-zinc-400 mt-1">
-                Waypoint #{activePoint.id} of {waypoints.length}: {activePoint.name}
-              </div>
-              <div className="text-[10px] text-emerald-400 mt-1">
-                Crypto: AES-256-GCM + SHA256 Chained
-              </div>
-            </div>
-          </Popup>
-        </Marker>
+            </Popup>
+          </Marker>
+        )}
       </MapContainer>
 
       {/* Map Legend & Coordinates Bar */}
@@ -290,12 +362,14 @@ export const MapView: React.FC<MapViewProps> = ({
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-0.5 border-t border-dashed border-zinc-500"></span>
-            Planned Corridors
+            Waypoints (Click to Target)
           </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-            Breach Beacon
-          </span>
+          {pendingTargetCoords && (
+            <span className="flex items-center gap-1 text-amber-400 font-bold">
+              <MapPin className="w-3 h-3 text-amber-400" />
+              Target Staged ({pendingTargetCoords.lat.toFixed(2)}°, {pendingTargetCoords.lng.toFixed(2)}°)
+            </span>
+          )}
         </div>
         <div className="text-zinc-300 font-bold">
           LAT: {activeLat.toFixed(4)}°N • LNG: {activeLng.toFixed(4)}°E • SPEED: {activePoint.speedKnots} KTS

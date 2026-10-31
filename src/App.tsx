@@ -5,7 +5,8 @@ import type {
   EncryptedPacket,
   ConsigneeLogEntry,
   CryptoKeysState,
-  AttackType,
+  AppViewMode,
+  VerificationFailureDetails,
 } from './types/crypto';
 import {
   generateSessionKey,
@@ -27,7 +28,7 @@ import { RightPanelConsignee } from './components/RightPanelConsignee';
 import { AuditLedgerModal } from './components/AuditLedgerModal';
 
 const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
-const BASE_EMIT_INTERVAL_MS = 3500;
+const CRUISE_INTERVAL_MS = 3000;
 
 export function App() {
   // Cryptographic Keys State
@@ -39,47 +40,64 @@ export function App() {
     deviceFingerprint: '',
   });
 
-  // Simulation & Voyage State
-  const [currentWaypointIndex, setCurrentWaypointIndex] = useState(0);
-  const [sequenceNumber, setSequenceNumber] = useState(0);
-  const [lastChainedHash, setLastChainedHash] = useState(GENESIS_HASH);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [speedMultiplier, setSpeedMultiplier] = useState(1);
+  // Consignee Key Status (Authorized Loaded vs Revoked Unauthorized)
+  const [isConsigneeKeyLoaded, setIsConsigneeKeyLoaded] = useState(true);
+
+  // Layout View Switcher
+  const [viewMode, setViewMode] = useState<AppViewMode>('split');
+
+  // Simulation & Dual Mode Controls
+  const [isCruiseMode, setIsCruiseMode] = useState(false);
+  const [isTransmitting, setIsTransmitting] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [packetBuildingStep, setPacketBuildingStep] = useState(0);
 
-  // Attack Suite State
-  const [activeAttack, setActiveAttack] = useState<AttackType | null>(null);
-  const [pendingAttack, setPendingAttack] = useState<AttackType | null>(null);
-  const [isPhysicalBreached, setIsPhysicalBreached] = useState(false);
-  const [activeTamperedSeq, setActiveTamperedSeq] = useState<number | null>(null);
+  // Interactive Sensor Sliders State
+  const [tempInput, setTempInput] = useState(21.4);
+  const [luxInput, setLuxInput] = useState(2);
+  const [shockInput, setShockInput] = useState(0.05);
 
-  // Data history
-  const [currentTelemetry, setCurrentTelemetry] = useState<TelemetryData | null>(null);
-  const [latestVerifiedTelemetry, setLatestVerifiedTelemetry] = useState<TelemetryData | null>(null);
+  // Staged Map Coordinates (from Map Click or Waypoint Click)
+  const [stagedCoords, setStagedCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  // Navigation Progress
+  const [currentWaypointIndex, setCurrentWaypointIndex] = useState(0);
+  const [sequenceNumber, setSequenceNumber] = useState(0);
+  const [lastChainedHash, setLastChainedHash] = useState(GENESIS_HASH);
+
+  // Packet Queues & Transit Workbench
+  const [stagedTransitPacket, setStagedTransitPacket] = useState<EncryptedPacket | null>(null);
   const [packetHistory, setPacketHistory] = useState<EncryptedPacket[]>([]);
   const [selectedPacket, setSelectedPacket] = useState<EncryptedPacket | null>(null);
+
+  // Telemetry States
+  const [currentTelemetry, setCurrentTelemetry] = useState<TelemetryData | null>(null);
+  const [latestVerifiedTelemetry, setLatestVerifiedTelemetry] = useState<TelemetryData | null>(null);
   const [consigneeLogs, setConsigneeLogs] = useState<ConsigneeLogEntry[]>([]);
 
-  // Consignee Alert Banner
+  // Verification Failure & Alerts
+  const [lastFailureDetails, setLastFailureDetails] = useState<VerificationFailureDetails | null>(null);
   const [activeAlert, setActiveAlert] = useState<{
-    type: 'TAMPER_HASH_FAIL' | 'TAMPER_AEAD_FAIL' | 'REPLAY_DROPPED' | 'PHYSICAL_BREACH' | null;
+    type: 'TAMPER_HASH_FAIL' | 'TAMPER_AEAD_FAIL' | 'REPLAY_DROPPED' | 'PHYSICAL_BREACH' | 'KEY_MISSING_LOCKED' | null;
     message: string;
     blockSeq?: number;
+    errorCode?: string;
   } | null>(null);
 
-  // Modal State
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
 
-  // Ref to track latest state inside intervals
+  // Keep stateRef for background cruise intervals
   const stateRef = useRef({
-    currentWaypointIndex: 0,
-    sequenceNumber: 0,
-    lastChainedHash: GENESIS_HASH,
+    currentWaypointIndex,
+    sequenceNumber,
+    lastChainedHash,
     cryptoKeys,
-    isPhysicalBreached: false,
-    pendingAttack: null as AttackType | null,
-    packetHistory: [] as EncryptedPacket[],
+    isConsigneeKeyLoaded,
+    tempInput,
+    luxInput,
+    shockInput,
+    stagedCoords,
+    packetHistory,
   });
 
   useEffect(() => {
@@ -88,8 +106,11 @@ export function App() {
       sequenceNumber,
       lastChainedHash,
       cryptoKeys,
-      isPhysicalBreached,
-      pendingAttack,
+      isConsigneeKeyLoaded,
+      tempInput,
+      luxInput,
+      shockInput,
+      stagedCoords,
       packetHistory,
     };
   }, [
@@ -97,18 +118,21 @@ export function App() {
     sequenceNumber,
     lastChainedHash,
     cryptoKeys,
-    isPhysicalBreached,
-    pendingAttack,
+    isConsigneeKeyLoaded,
+    tempInput,
+    luxInput,
+    shockInput,
+    stagedCoords,
     packetHistory,
   ]);
 
-  // Sync sound setting
+  // Sync sound settings
   useEffect(() => {
     sounds.setEnabled(soundEnabled);
   }, [soundEnabled]);
 
   /**
-   * Initialize or Reset Cryptographic Enclave
+   * 1. Initialize or Reset Ephemeral Cryptographic Keys
    */
   const initCrypto = useCallback(async () => {
     try {
@@ -119,7 +143,6 @@ export function App() {
       const deviceKeyPair = await generateDeviceKeyPair();
       const devicePubKeyHex = await exportPublicKeyToHex(deviceKeyPair.publicKey);
 
-      // Random hardware fingerprint for container HSM
       const randHex = Math.random().toString(16).substring(2, 8).toUpperCase();
       const fingerprint = `ATECC608B-SG-${randHex}`;
 
@@ -140,15 +163,14 @@ export function App() {
   }, []);
 
   /**
-   * Reset entire voyage
+   * Reset Voyage & Enclave Keys
    */
   const handleResetVoyage = useCallback(async () => {
-    setIsPlaying(false);
-    setActiveAttack(null);
-    setPendingAttack(null);
-    setIsPhysicalBreached(false);
-    setActiveTamperedSeq(null);
+    setIsCruiseMode(false);
+    setIsTransmitting(false);
     setActiveAlert(null);
+    setLastFailureDetails(null);
+    setStagedTransitPacket(null);
     setCurrentWaypointIndex(0);
     setSequenceNumber(0);
     setLastChainedHash(GENESIS_HASH);
@@ -158,90 +180,79 @@ export function App() {
     setCurrentTelemetry(null);
     setLatestVerifiedTelemetry(null);
     setPacketBuildingStep(0);
+    setStagedCoords(null);
+    setIsConsigneeKeyLoaded(true);
 
-    const keys = await initCrypto();
-    if (keys) {
-      setIsPlaying(true);
-    }
+    await initCrypto();
   }, [initCrypto]);
 
   /**
-   * Pipeline: Emit and Process a Single Telemetry Packet
+   * 2. Edge Transmitter: Build & Dispatch Encrypted Packet
    */
-  const emitTelemetryPacket = useCallback(async (forcedAttack?: AttackType) => {
+  const handleTransmitPacket = useCallback(async (autoForwardToConsignee: boolean = false) => {
     const {
       currentWaypointIndex: wpIdx,
       sequenceNumber: currentSeq,
       lastChainedHash: prevHash,
       cryptoKeys: keys,
-      isPhysicalBreached: physicallyBreached,
-      pendingAttack: currentPendingAttack,
+      tempInput: temp,
+      luxInput: lux,
+      shockInput: shock,
+      stagedCoords: targetCoords,
     } = stateRef.current;
 
     if (!keys.aesKey || !keys.deviceKeyPair) return;
 
-    const attackToApply = forcedAttack || currentPendingAttack;
-    if (attackToApply) {
-      setPendingAttack(null);
-      setActiveAttack(attackToApply);
-    }
-
+    setIsTransmitting(true);
     const nextSeq = currentSeq + 1;
-    const wp = MARITIME_WAYPOINTS[wpIdx % MARITIME_WAYPOINTS.length];
+    const defaultWp = MARITIME_WAYPOINTS[wpIdx % MARITIME_WAYPOINTS.length];
     const timestamp = Date.now();
 
-    // 1. Physical breach sensor logic (Lux spike to 924 lux)
-    const shouldBreachPhysical = attackToApply === 'physical' || physicallyBreached;
-    if (attackToApply === 'physical') {
-      setIsPhysicalBreached(true);
-    }
-
-    const luxValue = shouldBreachPhysical ? 924 : Math.round(wp.nominalLux + Math.random() * 2);
-    const tempValue = Number((wp.nominalTemp + (Math.random() * 0.4 - 0.2)).toFixed(1));
-    const batteryValue = Math.max(10, 98.4 - nextSeq * 0.15);
+    const lat = targetCoords?.lat ?? defaultWp.lat;
+    const lng = targetCoords?.lng ?? defaultWp.lng;
+    const waypointName = targetCoords ? 'Custom GPS Target' : defaultWp.name;
 
     const telemetryData: TelemetryData = {
       seq: nextSeq,
       timestamp,
-      lat: wp.lat,
-      lng: wp.lng,
-      temp: tempValue,
-      lux: luxValue,
-      battery: batteryValue,
-      shockG: 0.04 + Math.random() * 0.03,
-      doorSealed: !shouldBreachPhysical,
-      waypointName: wp.name,
+      lat,
+      lng,
+      temp,
+      lux,
+      battery: Math.max(12, 98.4 - nextSeq * 0.15),
+      shockG: shock,
+      doorSealed: lux <= 50,
+      waypointName,
     };
 
     setCurrentTelemetry(telemetryData);
 
-    // Visual step animation
-    setPacketBuildingStep(1); // Sensors sampled
-    await new Promise((r) => setTimeout(r, 60));
-    setPacketBuildingStep(2); // Serialized
-    await new Promise((r) => setTimeout(r, 60));
-    setPacketBuildingStep(3); // IV generated
-    await new Promise((r) => setTimeout(r, 60));
+    // Visual step sequence
+    setPacketBuildingStep(1);
+    await new Promise((r) => setTimeout(r, 40));
+    setPacketBuildingStep(2);
+    await new Promise((r) => setTimeout(r, 40));
+    setPacketBuildingStep(3);
+    await new Promise((r) => setTimeout(r, 40));
 
-    // 2. AES-GCM 256-bit Encryption
+    // AES-GCM 256-bit Encryption
     const encryptionResult = await encryptTelemetry(keys.aesKey, telemetryData);
-    setPacketBuildingStep(4); // Encrypted
+    setPacketBuildingStep(4);
 
-    // 3. Compute SHA-256 Hash Chain
+    // SHA-256 Hash Chain
     const currentHash = await computeHashChain(
       prevHash,
       encryptionResult.ciphertext,
       nextSeq,
       timestamp
     );
-    setPacketBuildingStep(5); // Hash chained
+    setPacketBuildingStep(5);
 
-    // 4. ECDSA P-256 Device Signature
+    // ECDSA P-256 Enclave Signature
     const deviceSig = await signTelemetryHash(keys.deviceKeyPair.privateKey, currentHash);
-    setPacketBuildingStep(6); // Signed
+    setPacketBuildingStep(6);
 
-    // Create raw packet
-    let packetToTransmit: EncryptedPacket = {
+    const newPacket: EncryptedPacket = {
       seq: nextSeq,
       prev_hash: prevHash,
       current_hash: currentHash,
@@ -249,166 +260,339 @@ export function App() {
       ciphertext: encryptionResult.ciphertext,
       device_sig: deviceSig,
       timestamp,
+      originalCiphertext: encryptionResult.ciphertext,
+      originalHash: currentHash,
     };
 
-    // 5. In-Transit Attack Manipulations (Simulate attacker on the relay)
-    if (attackToApply === 'mitm') {
-      // Alter a character in the ciphertext to corrupt payload in transit
-      const { tamperedHex } = tamperCiphertext(packetToTransmit.ciphertext);
-      packetToTransmit = {
-        ...packetToTransmit,
-        ciphertext: tamperedHex,
-        tampered: true,
-        tamperReason: 'MITM Byte Tampered in Transit (Payload Altered)',
+    sounds.playTransmit();
+    setIsTransmitting(false);
+
+    // Stage packet in the Untrusted Relay / MITM Workbench
+    setStagedTransitPacket(newPacket);
+    setSelectedPacket(newPacket);
+
+    // If in Live Cruise mode, auto-forward through transit immediately
+    if (autoForwardToConsignee) {
+      setTimeout(() => {
+        forwardPacketToConsignee(newPacket);
+      }, 200);
+    }
+  }, []);
+
+  /**
+   * 3. Forward Packet from Transit/MITM Workbench to Consignee Enclave
+   */
+  const forwardPacketToConsignee = useCallback(async (packet: EncryptedPacket) => {
+    const {
+      cryptoKeys: keys,
+      sequenceNumber: currentSeq,
+      lastChainedHash: prevHash,
+      isConsigneeKeyLoaded: keyLoaded,
+    } = stateRef.current;
+
+    const startTime = performance.now();
+    setStagedTransitPacket(null);
+
+    // Log packet into history
+    setPacketHistory((prev) => [...prev, packet]);
+    setSelectedPacket(packet);
+
+    // CHECK: Is Consignee Session Key Loaded or Revoked?
+    if (!keyLoaded || !keys.aesKey) {
+      sounds.playBreach();
+      const failLog: ConsigneeLogEntry = {
+        id: `block-${packet.seq}-${packet.timestamp}`,
+        seq: packet.seq,
+        timestamp: packet.timestamp,
+        status: 'KEY_MISSING_LOCKED',
+        prevHashMatch: false,
+        currentHashMatch: false,
+        aeadValid: false,
+        signatureValid: false,
+        replayCheckValid: false,
+        physicalCheckValid: false,
+        receivedHash: packet.current_hash,
+        calculatedHash: 'LOCKED: SESSION KEY NOT MOUNTED',
+        message: 'LOCKED: VALID SESSION KEY REQUIRED (Zero-Knowledge Concealment Active)',
+        errorCode: '0x10A_NO_KEY',
+        processingTimeMs: performance.now() - startTime,
+        rawCiphertextSnippet: packet.ciphertext.substring(0, 32) + '...',
       };
-      setActiveTamperedSeq(nextSeq);
-    } else if (attackToApply === 'replay') {
-      // Injects an expired or previously validated sequence packet
-      const replaySeq = Math.max(1, nextSeq - 2);
-      packetToTransmit = {
-        ...packetToTransmit,
-        seq: replaySeq,
-        isReplay: true,
-        tamperReason: `Replay Attack: Injected Expired Sequence #${replaySeq}`,
-      };
+
+      setConsigneeLogs((prev) => [...prev, failLog]);
+      setActiveAlert({
+        type: 'KEY_MISSING_LOCKED',
+        message: 'LOCKED: VALID SESSION KEY REQUIRED — Real-time telemetry locked in zero-knowledge enclave.',
+        errorCode: '0x10A_NO_KEY',
+      });
+      return;
     }
 
-    // Play transmit sound
-    sounds.playTransmit();
-
-    // Broadcast into untrusted relay
-    setPacketHistory((prev) => [...prev, packetToTransmit]);
-    setSelectedPacket(packetToTransmit);
-
-    // 6. Authorized Consignee Ingestion & Multi-Layer Zero-Knowledge Verification
-    const startTime = performance.now();
-    let currentHashMatch = false;
-    let aeadValid = false;
-    let signatureValid = false;
-    let replayCheckValid = false;
-    let physicalCheckValid = true;
-    let decryptedData: TelemetryData | null = null;
-    let consigneeStatus: ConsigneeLogEntry['status'] = 'VERIFIED';
-    let alertMessage = '';
-
-    // Step A: Sequence Replay Check
-    if (packetToTransmit.seq <= currentSeq && packetToTransmit.isReplay) {
-      replayCheckValid = false;
-      consigneeStatus = 'REPLAY_DROPPED';
-      alertMessage = `REPLAY DETECTED: Sequence #${packetToTransmit.seq} is expired or duplicate (expected #${nextSeq}). Packet dropped.`;
+    // CHECK A: Sequence Replay Check
+    if (packet.seq <= currentSeq && packet.isReplay) {
       sounds.playBreach();
+      const failLog: ConsigneeLogEntry = {
+        id: `block-${packet.seq}-${packet.timestamp}`,
+        seq: packet.seq,
+        timestamp: packet.timestamp,
+        status: 'REPLAY_DROPPED',
+        prevHashMatch: true,
+        currentHashMatch: false,
+        aeadValid: false,
+        signatureValid: false,
+        replayCheckValid: false,
+        physicalCheckValid: true,
+        receivedHash: packet.current_hash,
+        calculatedHash: 'N/A_EXPIRED_SEQ',
+        message: `REPLAY DETECTED: Sequence #${packet.seq} is expired or duplicate (expected #${currentSeq + 1}). Packet dropped.`,
+        errorCode: '0x3F1_REPLAY',
+        processingTimeMs: performance.now() - startTime,
+      };
+
+      setConsigneeLogs((prev) => [...prev, failLog]);
       setActiveAlert({
         type: 'REPLAY_DROPPED',
-        message: alertMessage,
-        blockSeq: packetToTransmit.seq,
+        message: `REPLAY DETECTED: Sequence #${packet.seq} is expired or duplicate. Dropped.`,
+        blockSeq: packet.seq,
+        errorCode: '0x3F1_REPLAY',
       });
-    } else {
-      replayCheckValid = true;
+      return;
+    }
 
-      // Step B: SHA-256 Hash Chain Recalculation
-      const calculatedHash = await computeHashChain(
-        prevHash,
-        packetToTransmit.ciphertext,
-        packetToTransmit.seq,
-        packetToTransmit.timestamp
-      );
+    // CHECK B: SHA-256 Hash Recalculation
+    const calculatedHash = await computeHashChain(
+      prevHash,
+      packet.ciphertext,
+      packet.seq,
+      packet.timestamp
+    );
 
-      currentHashMatch = calculatedHash.toLowerCase() === packetToTransmit.current_hash.toLowerCase();
+    const isHashValid = calculatedHash.toLowerCase() === packet.current_hash.toLowerCase();
 
-      // Step C: ECDSA P-256 Signature Verification
-      signatureValid = await verifyTelemetrySignature(
-        keys.deviceKeyPair.publicKey,
-        packetToTransmit.device_sig,
-        packetToTransmit.current_hash
-      );
+    // CHECK C: AES-GCM AEAD Tag Decryption
+    let aeadValid = false;
+    let decryptedData: TelemetryData | null = null;
+    try {
+      decryptedData = await decryptTelemetry(keys.aesKey, packet.ciphertext, packet.iv);
+      aeadValid = true;
+    } catch {
+      aeadValid = false;
+    }
 
-      // Step D: AES-GCM Decryption (AEAD Tag Verification)
-      try {
-        decryptedData = await decryptTelemetry(
-          keys.aesKey,
-          packetToTransmit.ciphertext,
-          packetToTransmit.iv
-        );
-        aeadValid = true;
-      } catch {
-        aeadValid = false;
-      }
+    // CHECK D: ECDSA P-256 Enclave Signature Verification
+    const signatureValid = await verifyTelemetrySignature(
+      keys.deviceKeyPair!.publicKey,
+      packet.device_sig,
+      packet.current_hash
+    );
 
-      // Check for MITM Integrity Failure
-      if (!currentHashMatch || !aeadValid) {
-        consigneeStatus = 'TAMPER_HASH_FAIL';
-        alertMessage = `INTEGRITY BREACH: HASH MISMATCH AT BLOCK #${packetToTransmit.seq} (AES-GCM Auth Tag Failure)`;
-        sounds.playBreach();
-        setActiveAlert({
-          type: 'TAMPER_HASH_FAIL',
-          message: alertMessage,
-          blockSeq: packetToTransmit.seq,
-        });
-      } else if (decryptedData && decryptedData.lux > 100) {
-        // Step E: Physical Intrusion Check (Lux > 100)
-        physicalCheckValid = false;
-        consigneeStatus = 'PHYSICAL_BREACH';
-        alertMessage = `PHYSICAL CONTAINER BREACH: CARGO DOOR OPENED (LUX ${decryptedData.lux}). GEO-COORDINATES FLAGGED ON MARITIME MAP.`;
-        sounds.playBreach();
-        setActiveAlert({
-          type: 'PHYSICAL_BREACH',
-          message: alertMessage,
-          blockSeq: packetToTransmit.seq,
-        });
-        setLatestVerifiedTelemetry(decryptedData);
-      } else {
-        // Valid packet verified!
-        consigneeStatus = 'VERIFIED';
-        alertMessage = `Block #${packetToTransmit.seq} cryptographically verified. Sealed into hash ledger.`;
-        sounds.playVerified();
-        setLatestVerifiedTelemetry(decryptedData);
-        // If alert was MITM or Replay, clear it on next successful block
-        if (activeAlert?.type !== 'PHYSICAL_BREACH') {
-          setActiveAlert(null);
-        }
-      }
+    const processingTime = performance.now() - startTime;
 
-      const processingTime = performance.now() - startTime;
+    // SCENARIO 1: INTEGRITY BREACH / TAMPER DETECTED
+    if (!isHashValid || !aeadValid) {
+      sounds.playBreach();
+      const errorCode = 'Error 0x4B2';
+      const failureReason = !isHashValid
+        ? `Expected Hash: ${packet.current_hash.substring(0, 16)}... vs Calculated Hash: ${calculatedHash.substring(0, 16)}... -> INTEGRITY FAILURE (${errorCode})`
+        : `AES-GCM AEAD Authentication Tag mismatch (${errorCode})`;
 
-      // Record to Consignee Audit Ledger
-      const logEntry: ConsigneeLogEntry = {
-        id: `block-${packetToTransmit.seq}-${timestamp}`,
-        seq: packetToTransmit.seq,
-        timestamp,
-        status: consigneeStatus,
+      setLastFailureDetails({
+        blockSeq: packet.seq,
+        expectedHash: packet.current_hash,
+        calculatedHash: calculatedHash,
+        errorCode,
+        reason: failureReason,
+        timestamp: packet.timestamp,
+        receivedCiphertext: packet.ciphertext,
+      });
+
+      const failLog: ConsigneeLogEntry = {
+        id: `block-${packet.seq}-${packet.timestamp}`,
+        seq: packet.seq,
+        timestamp: packet.timestamp,
+        status: 'TAMPER_HASH_FAIL',
         prevHashMatch: true,
-        currentHashMatch,
+        currentHashMatch: isHashValid,
         aeadValid,
         signatureValid,
-        replayCheckValid,
-        physicalCheckValid,
-        receivedHash: packetToTransmit.current_hash,
+        replayCheckValid: true,
+        physicalCheckValid: true,
+        receivedHash: packet.current_hash,
         calculatedHash,
-        message: alertMessage,
-        telemetry: decryptedData || undefined,
+        message: `INTEGRITY FAILURE (${errorCode}): Payload modified in transit. Route rendering halted.`,
+        errorCode,
         processingTimeMs: processingTime,
       };
 
-      setConsigneeLogs((prev) => [...prev, logEntry]);
-
-      // Only advance chain and waypoint if the packet was valid and not tampered/replayed
-      if (consigneeStatus === 'VERIFIED' || consigneeStatus === 'PHYSICAL_BREACH') {
-        setSequenceNumber(nextSeq);
-        setLastChainedHash(packetToTransmit.current_hash);
-        setCurrentWaypointIndex((prevIdx) => (prevIdx + 1) % MARITIME_WAYPOINTS.length);
-      }
+      setConsigneeLogs((prev) => [...prev, failLog]);
+      setActiveAlert({
+        type: 'TAMPER_HASH_FAIL',
+        message: `INTEGRITY FAILURE (${errorCode}): Expected Hash [${packet.current_hash.substring(0, 12)}...] vs Calculated Hash [${calculatedHash.substring(0, 12)}...]`,
+        blockSeq: packet.seq,
+        errorCode,
+      });
+      return;
     }
-  }, [activeAlert?.type]);
 
-  // Initial load: Generate cryptographic keys and emit block #1
+    // SCENARIO 2: PHYSICAL DOOR BREACH (Lux > 50)
+    if (decryptedData && decryptedData.lux > 50) {
+      sounds.playBreach();
+      const failLog: ConsigneeLogEntry = {
+        id: `block-${packet.seq}-${packet.timestamp}`,
+        seq: packet.seq,
+        timestamp: packet.timestamp,
+        status: 'PHYSICAL_BREACH',
+        prevHashMatch: true,
+        currentHashMatch: true,
+        aeadValid: true,
+        signatureValid,
+        replayCheckValid: true,
+        physicalCheckValid: false,
+        receivedHash: packet.current_hash,
+        calculatedHash,
+        message: `PHYSICAL CONTAINER BREACH: CARGO DOOR OPENED (LUX ${decryptedData.lux}). GEO-COORDINATES FLAGGED ON MARITIME MAP.`,
+        errorCode: '0x99A_LUX_SPIKE',
+        telemetry: decryptedData,
+        processingTimeMs: processingTime,
+      };
+
+      setConsigneeLogs((prev) => [...prev, failLog]);
+      setLatestVerifiedTelemetry(decryptedData);
+      setActiveAlert({
+        type: 'PHYSICAL_BREACH',
+        message: `PHYSICAL CONTAINER BREACH: CARGO DOOR OPENED (LUX ${decryptedData.lux}). GEO-COORDINATES FLAGGED ON MARITIME MAP.`,
+        blockSeq: packet.seq,
+        errorCode: '0x99A_LUX_SPIKE',
+      });
+
+      // Advance sequence and position
+      setSequenceNumber(packet.seq);
+      setLastChainedHash(packet.current_hash);
+      setCurrentWaypointIndex((prev) => (prev + 1) % MARITIME_WAYPOINTS.length);
+      setStagedCoords(null);
+      return;
+    }
+
+    // SCENARIO 3: AUTHENTIC VERIFIED BLOCK
+    sounds.playVerified();
+    setActiveAlert(null);
+    setLastFailureDetails(null);
+    setLatestVerifiedTelemetry(decryptedData);
+
+    const verifiedLog: ConsigneeLogEntry = {
+      id: `block-${packet.seq}-${packet.timestamp}`,
+      seq: packet.seq,
+      timestamp: packet.timestamp,
+      status: 'VERIFIED',
+      prevHashMatch: true,
+      currentHashMatch: true,
+      aeadValid: true,
+      signatureValid,
+      replayCheckValid: true,
+      physicalCheckValid: true,
+      receivedHash: packet.current_hash,
+      calculatedHash,
+      message: `Block #${packet.seq} cryptographically verified. SHA-256 chained into audit ledger.`,
+      telemetry: decryptedData || undefined,
+      processingTimeMs: processingTime,
+    };
+
+    setConsigneeLogs((prev) => [...prev, verifiedLog]);
+
+    // Advance cryptographic chain
+    setSequenceNumber(packet.seq);
+    setLastChainedHash(packet.current_hash);
+    setCurrentWaypointIndex((prev) => (prev + 1) % MARITIME_WAYPOINTS.length);
+    setStagedCoords(null);
+  }, []);
+
+  /**
+   * 4. Corrupt Bit & Forward action from MITM Workbench
+   */
+  const handleCorruptAndForward = useCallback(
+    (customTamperedHex?: string) => {
+      if (!stagedTransitPacket) return;
+
+      const tamperedCiphertext =
+        customTamperedHex || tamperCiphertext(stagedTransitPacket.ciphertext).tamperedHex;
+
+      const corruptedPacket: EncryptedPacket = {
+        ...stagedTransitPacket,
+        ciphertext: tamperedCiphertext,
+        tampered: true,
+        tamperReason: 'Corrupted Bit in Transit via MITM Workbench',
+      };
+
+      forwardPacketToConsignee(corruptedPacket);
+    },
+    [stagedTransitPacket, forwardPacketToConsignee]
+  );
+
+  /**
+   * 5. Inject Replay Attack
+   */
+  const handleInjectReplay = useCallback(() => {
+    if (packetHistory.length < 1) return;
+    const pastPacket = packetHistory[Math.max(0, packetHistory.length - 2)];
+    const replayPacket: EncryptedPacket = {
+      ...pastPacket,
+      isReplay: true,
+      tamperReason: `Replay Attack: Injected Expired Sequence #${pastPacket.seq}`,
+    };
+    forwardPacketToConsignee(replayPacket);
+  }, [packetHistory, forwardPacketToConsignee]);
+
+  /**
+   * 6. Direct JSON Export of Cryptographic Audit Trail
+   */
+  const handleExportAuditJSON = useCallback(() => {
+    const certificate = {
+      title: 'CargoCrypt Tamper-Evident Maritime Audit Certificate',
+      timestamp: new Date().toISOString(),
+      standards: 'NIST FIPS 197 (AES-256-GCM), FIPS 180-4 (SHA-256), FIPS 186-4 (ECDSA P-256)',
+      cryptoImplementation: 'W3C Browser-Native Web Crypto API (SubtleCrypto)',
+      genesisHash: GENESIS_HASH,
+      deviceFingerprint: cryptoKeys.deviceFingerprint,
+      devicePublicKeySPKI: cryptoKeys.devicePubKeyHex,
+      summary: {
+        totalBlocks: consigneeLogs.length,
+        verifiedBlocks: consigneeLogs.filter((l) => l.status === 'VERIFIED').length,
+        incidentsCaught: consigneeLogs.filter((l) => l.status !== 'VERIFIED').length,
+      },
+      auditLedgerChain: consigneeLogs.map((l) => ({
+        seq: l.seq,
+        timestamp: l.timestamp,
+        status: l.status,
+        calculatedHash: l.calculatedHash,
+        receivedHash: l.receivedHash,
+        hashMatch: l.currentHashMatch,
+        aeadValid: l.aeadValid,
+        signatureValid: l.signatureValid,
+        message: l.message,
+        errorCode: l.errorCode || null,
+        telemetry: l.telemetry || null,
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(certificate, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cargocrypt-audit-trail-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [consigneeLogs, cryptoKeys]);
+
+  // Initial setup: generate keys and stage block #1
   useEffect(() => {
     let mounted = true;
     (async () => {
       const keys = await initCrypto();
       if (keys && mounted) {
-        // Emit initial block
         setTimeout(() => {
-          emitTelemetryPacket();
+          handleTransmitPacket(true);
         }, 500);
       }
     })();
@@ -417,94 +601,168 @@ export function App() {
     };
   }, [initCrypto]);
 
-  // Periodic simulation emission timer (every 3.5s by default)
+  // Live Cruise mode: Automatically emit every 3 seconds
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isCruiseMode) return;
 
-    const intervalTime = Math.max(800, BASE_EMIT_INTERVAL_MS / speedMultiplier);
     const interval = setInterval(() => {
-      emitTelemetryPacket();
-    }, intervalTime);
+      handleTransmitPacket(true);
+    }, CRUISE_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isPlaying, speedMultiplier, emitTelemetryPacket]);
-
-  // Red Team Attack Triggers
-  const handleTriggerAttack = (type: AttackType) => {
-    setPendingAttack(type);
-    // If paused, immediately emit with attack
-    if (!isPlaying) {
-      emitTelemetryPacket(type);
-    }
-  };
-
-  const handleManualStep = () => {
-    emitTelemetryPacket();
-  };
-
-  const handleCycleSpeed = () => {
-    setSpeedMultiplier((prev) => (prev === 1 ? 2 : prev === 2 ? 4 : 1));
-  };
+  }, [isCruiseMode, handleTransmitPacket]);
 
   return (
     <div className="flex flex-col min-h-screen bg-[#05070b] text-zinc-100 selection:bg-emerald-500 selection:text-black">
-      {/* Header Bar */}
+      {/* Header Bar with View Switcher, Live Indicator, and Audit Export */}
       <HeaderBar
-        isPlaying={isPlaying}
-        onTogglePlay={() => setIsPlaying(!isPlaying)}
-        speedMultiplier={speedMultiplier}
-        onCycleSpeed={handleCycleSpeed}
-        onManualStep={handleManualStep}
-        onTriggerAttack={handleTriggerAttack}
+        viewMode={viewMode}
+        onSetViewMode={setViewMode}
         onResetVoyage={handleResetVoyage}
         onOpenAuditModal={() => setIsAuditModalOpen(true)}
+        onExportAuditJSON={handleExportAuditJSON}
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled(!soundEnabled)}
-        activeAttack={activeAttack}
-        pendingAttack={pendingAttack}
-        currentWaypointNum={currentWaypointIndex + 1}
-        totalWaypoints={MARITIME_WAYPOINTS.length}
         totalBlocksVerified={consigneeLogs.filter((l) => l.status === 'VERIFIED').length}
+        totalIncidents={consigneeLogs.filter((l) => l.status !== 'VERIFIED').length}
+        isKeyLoaded={isConsigneeKeyLoaded}
       />
 
-      {/* Main 3-Panel Architecture Layout */}
-      <main className="flex-1 p-3 md:p-4 grid grid-cols-1 lg:grid-cols-12 gap-3 md:gap-4 overflow-hidden">
-        {/* Left Panel: IoT Edge Device (col-span-3) */}
-        <div className="lg:col-span-3 h-[600px] lg:h-[calc(100vh-80px)] flex flex-col">
-          <LeftPanelIoT
-            currentTelemetry={currentTelemetry}
-            latestPacket={packetHistory[packetHistory.length - 1] || null}
-            cryptoKeys={cryptoKeys}
-            packetBuildingStep={packetBuildingStep}
-            isPhysicalBreached={isPhysicalBreached}
-          />
-        </div>
+      {/* Main Content Area based on View Mode */}
+      <main className="flex-1 p-3 md:p-4 overflow-hidden">
+        {/* VIEW 1: Split SOC View (Tri-Panel) */}
+        {viewMode === 'split' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 md:gap-4 h-[calc(100vh-80px)]">
+            {/* Left Panel: IoT Edge Transmitter (3 cols) */}
+            <div className="lg:col-span-3 h-full flex flex-col">
+              <LeftPanelIoT
+                currentTelemetry={currentTelemetry}
+                latestPacket={packetHistory[packetHistory.length - 1] || null}
+                cryptoKeys={cryptoKeys}
+                packetBuildingStep={packetBuildingStep}
+                isPhysicalBreached={activeAlert?.type === 'PHYSICAL_BREACH'}
+                isCruiseMode={isCruiseMode}
+                onToggleCruiseMode={() => setIsCruiseMode(!isCruiseMode)}
+                onManualTransmit={() => handleTransmitPacket(false)}
+                isTransmitting={isTransmitting}
+                tempInput={tempInput}
+                onTempChange={setTempInput}
+                luxInput={luxInput}
+                onLuxChange={setLuxInput}
+                shockInput={shockInput}
+                onShockChange={setShockInput}
+                stagedCoords={stagedCoords}
+                waypoints={MARITIME_WAYPOINTS}
+                currentWaypointIndex={currentWaypointIndex}
+                onSelectWaypointIndex={(idx) => {
+                  setCurrentWaypointIndex(idx);
+                  setStagedCoords(null);
+                }}
+              />
+            </div>
 
-        {/* Center Panel: Untrusted Relay / Hacker View (col-span-4) */}
-        <div className="lg:col-span-4 h-[600px] lg:h-[calc(100vh-80px)] flex flex-col">
-          <CenterPanelRelay
-            packetHistory={packetHistory}
-            selectedPacket={selectedPacket}
-            onSelectPacket={setSelectedPacket}
-            onTamperCurrentPayload={() => handleTriggerAttack('mitm')}
-            activeTamperedPacketSeq={activeTamperedSeq}
-          />
-        </div>
+            {/* Center Panel: Untrusted Relay / MITM Workbench (4 cols) */}
+            <div className="lg:col-span-4 h-full flex flex-col">
+              <CenterPanelRelay
+                packetHistory={packetHistory}
+                selectedPacket={selectedPacket}
+                onSelectPacket={setSelectedPacket}
+                stagedTransitPacket={stagedTransitPacket}
+                onForwardPacket={forwardPacketToConsignee}
+                onCorruptAndForward={handleCorruptAndForward}
+                onInjectReplay={handleInjectReplay}
+              />
+            </div>
 
-        {/* Right Panel: Authorized Consignee & Map (col-span-5) */}
-        <div className="lg:col-span-5 h-[650px] lg:h-[calc(100vh-80px)] flex flex-col">
-          <RightPanelConsignee
-            logs={consigneeLogs}
-            latestVerifiedTelemetry={latestVerifiedTelemetry}
-            waypoints={MARITIME_WAYPOINTS}
-            currentWaypointIndex={currentWaypointIndex}
-            cryptoKeys={cryptoKeys}
-            activeAlert={activeAlert}
-          />
-        </div>
+            {/* Right Panel: Authorized Consignee & Map (5 cols) */}
+            <div className="lg:col-span-5 h-full flex flex-col">
+              <RightPanelConsignee
+                logs={consigneeLogs}
+                latestVerifiedTelemetry={latestVerifiedTelemetry}
+                waypoints={MARITIME_WAYPOINTS}
+                currentWaypointIndex={currentWaypointIndex}
+                cryptoKeys={cryptoKeys}
+                isKeyLoaded={isConsigneeKeyLoaded}
+                onToggleKeyLoaded={() => setIsConsigneeKeyLoaded(!isConsigneeKeyLoaded)}
+                onReloadSessionKey={initCrypto}
+                activeAlert={activeAlert}
+                lastFailureDetails={lastFailureDetails}
+                onDismissFailureModal={() => setLastFailureDetails(null)}
+                stagedCoords={stagedCoords}
+                onSelectCoords={(lat, lng) => setStagedCoords({ lat, lng })}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* VIEW 2: IoT Edge Terminal Only */}
+        {viewMode === 'iot' && (
+          <div className="max-w-4xl mx-auto h-[calc(100vh-80px)]">
+            <LeftPanelIoT
+              currentTelemetry={currentTelemetry}
+              latestPacket={packetHistory[packetHistory.length - 1] || null}
+              cryptoKeys={cryptoKeys}
+              packetBuildingStep={packetBuildingStep}
+              isPhysicalBreached={activeAlert?.type === 'PHYSICAL_BREACH'}
+              isCruiseMode={isCruiseMode}
+              onToggleCruiseMode={() => setIsCruiseMode(!isCruiseMode)}
+              onManualTransmit={() => handleTransmitPacket(false)}
+              isTransmitting={isTransmitting}
+              tempInput={tempInput}
+              onTempChange={setTempInput}
+              luxInput={luxInput}
+              onLuxChange={setLuxInput}
+              shockInput={shockInput}
+              onShockChange={setShockInput}
+              stagedCoords={stagedCoords}
+              waypoints={MARITIME_WAYPOINTS}
+              currentWaypointIndex={currentWaypointIndex}
+              onSelectWaypointIndex={(idx) => {
+                setCurrentWaypointIndex(idx);
+                setStagedCoords(null);
+              }}
+            />
+          </div>
+        )}
+
+        {/* VIEW 3: Cloud Interceptor / MITM Workbench Only */}
+        {viewMode === 'relay' && (
+          <div className="max-w-5xl mx-auto h-[calc(100vh-80px)]">
+            <CenterPanelRelay
+              packetHistory={packetHistory}
+              selectedPacket={selectedPacket}
+              onSelectPacket={setSelectedPacket}
+              stagedTransitPacket={stagedTransitPacket}
+              onForwardPacket={forwardPacketToConsignee}
+              onCorruptAndForward={handleCorruptAndForward}
+              onInjectReplay={handleInjectReplay}
+            />
+          </div>
+        )}
+
+        {/* VIEW 4: Consignee Portal Only */}
+        {viewMode === 'consignee' && (
+          <div className="max-w-6xl mx-auto h-[calc(100vh-80px)]">
+            <RightPanelConsignee
+              logs={consigneeLogs}
+              latestVerifiedTelemetry={latestVerifiedTelemetry}
+              waypoints={MARITIME_WAYPOINTS}
+              currentWaypointIndex={currentWaypointIndex}
+              cryptoKeys={cryptoKeys}
+              isKeyLoaded={isConsigneeKeyLoaded}
+              onToggleKeyLoaded={() => setIsConsigneeKeyLoaded(!isConsigneeKeyLoaded)}
+              onReloadSessionKey={initCrypto}
+              activeAlert={activeAlert}
+              lastFailureDetails={lastFailureDetails}
+              onDismissFailureModal={() => setLastFailureDetails(null)}
+              stagedCoords={stagedCoords}
+              onSelectCoords={(lat, lng) => setStagedCoords({ lat, lng })}
+            />
+          </div>
+        )}
       </main>
 
-      {/* Cryptographic Audit Certificate Modal */}
+      {/* Audit Certificate Modal */}
       <AuditLedgerModal
         isOpen={isAuditModalOpen}
         onClose={() => setIsAuditModalOpen(false)}

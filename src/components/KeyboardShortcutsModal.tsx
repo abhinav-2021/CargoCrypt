@@ -40,6 +40,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         { key: '2', desc: 'Focus IoT Edge Terminal only' },
         { key: '3', desc: 'Focus Cloud Interceptor (MITM Workbench)' },
         { key: '4', desc: 'Focus Consignee Portal & Nautical GIS' },
+        { key: 'A', desc: 'Open OWASP ASVS 5.0 Compliance Inspector & Live Tests' },
         { key: '?', desc: 'Open / Close this keyboard shortcuts guide' },
         { key: 'Esc', desc: 'Close modals & dismiss active alerts' },
       ],

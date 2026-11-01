@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Shield,
+  ShieldCheck,
   RotateCcw,
   Volume2,
   VolumeX,
@@ -19,6 +20,7 @@ interface HeaderBarProps {
   onSetViewMode: (mode: AppViewMode) => void;
   onResetVoyage: () => void;
   onOpenAuditModal: () => void;
+  onOpenASVSModal?: () => void;
   onOpenShortcutsModal?: () => void;
   onExportAuditJSON: () => void;
   soundEnabled: boolean;
@@ -33,6 +35,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onSetViewMode,
   onResetVoyage,
   onOpenAuditModal,
+  onOpenASVSModal,
   onOpenShortcutsModal,
   onExportAuditJSON,
   soundEnabled,
@@ -158,6 +161,21 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             <kbd className="px-1 py-0.2 rounded bg-black/60 border border-zinc-700 text-[9px] text-amber-300 font-bold">
               ?
             </kbd>
+          </button>
+        )}
+
+        {/* OWASP ASVS 5.0 Inspector */}
+        {onOpenASVSModal && (
+          <button
+            onClick={onOpenASVSModal}
+            title="Inspect OWASP ASVS 5.0 Level 3 Verification Matrix & Run Live Cryptographic Assertions"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-mono font-bold bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-600/70 transition-all shadow-md active:scale-95"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">OWASP ASVS 5.0</span>
+            <span className="px-1 py-0.2 rounded bg-cyan-900/80 border border-cyan-700/60 text-[9px] text-cyan-200 font-bold">
+              L3
+            </span>
           </button>
         )}
 

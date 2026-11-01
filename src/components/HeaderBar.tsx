@@ -10,6 +10,7 @@ import {
   Radio,
   Building2,
   Download,
+  Keyboard,
 } from 'lucide-react';
 import type { AppViewMode } from '../types/crypto';
 
@@ -18,6 +19,7 @@ interface HeaderBarProps {
   onSetViewMode: (mode: AppViewMode) => void;
   onResetVoyage: () => void;
   onOpenAuditModal: () => void;
+  onOpenShortcutsModal?: () => void;
   onExportAuditJSON: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
@@ -31,6 +33,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onSetViewMode,
   onResetVoyage,
   onOpenAuditModal,
+  onOpenShortcutsModal,
   onExportAuditJSON,
   soundEnabled,
   onToggleSound,
@@ -142,6 +145,21 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           <Download className="w-3.5 h-3.5 text-emerald-400" />
           <span>Export Audit Trail (JSON)</span>
         </button>
+
+        {/* Hotkeys Guide */}
+        {onOpenShortcutsModal && (
+          <button
+            onClick={onOpenShortcutsModal}
+            title="Keyboard Hotkeys (?)"
+            className="hidden sm:flex items-center gap-1.5 px-2 py-1.5 rounded text-xs font-mono font-semibold bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 hover:border-zinc-700 transition-all hover:text-amber-300"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden xl:inline">Hotkeys</span>
+            <kbd className="px-1 py-0.2 rounded bg-black/60 border border-zinc-700 text-[9px] text-amber-300 font-bold">
+              ?
+            </kbd>
+          </button>
+        )}
 
         {/* View Modal Certificate */}
         <button

@@ -22,6 +22,8 @@ import {
 } from './crypto/webcrypto';
 import { sounds } from './sound/audioEffects';
 import { HeaderBar } from './components/HeaderBar';
+import { RedTeamToolbar } from './components/RedTeamToolbar';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LeftPanelIoT } from './components/LeftPanelIoT';
 import { CenterPanelRelay } from './components/CenterPanelRelay';
 import { RightPanelConsignee } from './components/RightPanelConsignee';
@@ -85,6 +87,7 @@ export function App() {
   } | null>(null);
 
   const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
 
   // Keep stateRef for background cruise intervals
   const stateRef = useRef({
@@ -187,100 +190,7 @@ export function App() {
   }, [initCrypto]);
 
   /**
-   * 2. Edge Transmitter: Build & Dispatch Encrypted Packet
-   */
-  const handleTransmitPacket = useCallback(async (autoForwardToConsignee: boolean = false) => {
-    const {
-      currentWaypointIndex: wpIdx,
-      sequenceNumber: currentSeq,
-      lastChainedHash: prevHash,
-      cryptoKeys: keys,
-      tempInput: temp,
-      luxInput: lux,
-      shockInput: shock,
-      stagedCoords: targetCoords,
-    } = stateRef.current;
-
-    if (!keys.aesKey || !keys.deviceKeyPair) return;
-
-    setIsTransmitting(true);
-    const nextSeq = currentSeq + 1;
-    const defaultWp = MARITIME_WAYPOINTS[wpIdx % MARITIME_WAYPOINTS.length];
-    const timestamp = Date.now();
-
-    const lat = targetCoords?.lat ?? defaultWp.lat;
-    const lng = targetCoords?.lng ?? defaultWp.lng;
-    const waypointName = targetCoords ? 'Custom GPS Target' : defaultWp.name;
-
-    const telemetryData: TelemetryData = {
-      seq: nextSeq,
-      timestamp,
-      lat,
-      lng,
-      temp,
-      lux,
-      battery: Math.max(12, 98.4 - nextSeq * 0.15),
-      shockG: shock,
-      doorSealed: lux <= 50,
-      waypointName,
-    };
-
-    setCurrentTelemetry(telemetryData);
-
-    // Visual step sequence
-    setPacketBuildingStep(1);
-    await new Promise((r) => setTimeout(r, 40));
-    setPacketBuildingStep(2);
-    await new Promise((r) => setTimeout(r, 40));
-    setPacketBuildingStep(3);
-    await new Promise((r) => setTimeout(r, 40));
-
-    // AES-GCM 256-bit Encryption
-    const encryptionResult = await encryptTelemetry(keys.aesKey, telemetryData);
-    setPacketBuildingStep(4);
-
-    // SHA-256 Hash Chain
-    const currentHash = await computeHashChain(
-      prevHash,
-      encryptionResult.ciphertext,
-      nextSeq,
-      timestamp
-    );
-    setPacketBuildingStep(5);
-
-    // ECDSA P-256 Enclave Signature
-    const deviceSig = await signTelemetryHash(keys.deviceKeyPair.privateKey, currentHash);
-    setPacketBuildingStep(6);
-
-    const newPacket: EncryptedPacket = {
-      seq: nextSeq,
-      prev_hash: prevHash,
-      current_hash: currentHash,
-      iv: encryptionResult.iv,
-      ciphertext: encryptionResult.ciphertext,
-      device_sig: deviceSig,
-      timestamp,
-      originalCiphertext: encryptionResult.ciphertext,
-      originalHash: currentHash,
-    };
-
-    sounds.playTransmit();
-    setIsTransmitting(false);
-
-    // Stage packet in the Untrusted Relay / MITM Workbench
-    setStagedTransitPacket(newPacket);
-    setSelectedPacket(newPacket);
-
-    // If in Live Cruise mode, auto-forward through transit immediately
-    if (autoForwardToConsignee) {
-      setTimeout(() => {
-        forwardPacketToConsignee(newPacket);
-      }, 200);
-    }
-  }, []);
-
-  /**
-   * 3. Forward Packet from Transit/MITM Workbench to Consignee Enclave
+   * 2. Forward Packet from Transit/MITM Workbench to Consignee Enclave
    */
   const forwardPacketToConsignee = useCallback(async (packet: EncryptedPacket) => {
     const {
@@ -507,6 +417,123 @@ export function App() {
   }, []);
 
   /**
+   * 3. Edge Transmitter: Build & Dispatch Encrypted Packet
+   */
+  const handleTransmitPacket = useCallback(
+    async (
+      autoForwardToConsignee: boolean = false,
+      overrideTelemetry?: Partial<TelemetryData>,
+      tamperInTransit?: boolean
+    ): Promise<EncryptedPacket | null> => {
+      const {
+        currentWaypointIndex: wpIdx,
+        sequenceNumber: currentSeq,
+        lastChainedHash: prevHash,
+        cryptoKeys: keys,
+        tempInput: temp,
+        luxInput: lux,
+        shockInput: shock,
+        stagedCoords: targetCoords,
+      } = stateRef.current;
+
+      if (!keys.aesKey || !keys.deviceKeyPair) return null;
+
+      setIsTransmitting(true);
+      const nextSeq = currentSeq + 1;
+      const defaultWp = MARITIME_WAYPOINTS[wpIdx % MARITIME_WAYPOINTS.length];
+      const timestamp = Date.now();
+
+      const lat = overrideTelemetry?.lat ?? (targetCoords?.lat ?? defaultWp.lat);
+      const lng = overrideTelemetry?.lng ?? (targetCoords?.lng ?? defaultWp.lng);
+      const waypointName = targetCoords ? 'Custom GPS Target' : defaultWp.name;
+      const finalTemp = overrideTelemetry?.temp ?? temp;
+      const finalLux = overrideTelemetry?.lux ?? lux;
+      const finalShock = overrideTelemetry?.shockG ?? shock;
+
+      const telemetryData: TelemetryData = {
+        seq: nextSeq,
+        timestamp,
+        lat,
+        lng,
+        temp: finalTemp,
+        lux: finalLux,
+        battery: Math.max(12, 98.4 - nextSeq * 0.15),
+        shockG: finalShock,
+        doorSealed: finalLux <= 50,
+        waypointName,
+      };
+
+      setCurrentTelemetry(telemetryData);
+
+      // Visual step sequence
+      setPacketBuildingStep(1);
+      await new Promise((r) => setTimeout(r, 40));
+      setPacketBuildingStep(2);
+      await new Promise((r) => setTimeout(r, 40));
+      setPacketBuildingStep(3);
+      await new Promise((r) => setTimeout(r, 40));
+
+      // AES-GCM 256-bit Encryption
+      const encryptionResult = await encryptTelemetry(keys.aesKey, telemetryData);
+      setPacketBuildingStep(4);
+
+      // SHA-256 Hash Chain
+      const currentHash = await computeHashChain(
+        prevHash,
+        encryptionResult.ciphertext,
+        nextSeq,
+        timestamp
+      );
+      setPacketBuildingStep(5);
+
+      // ECDSA P-256 Enclave Signature
+      const deviceSig = await signTelemetryHash(keys.deviceKeyPair.privateKey, currentHash);
+      setPacketBuildingStep(6);
+
+      let finalCiphertext = encryptionResult.ciphertext;
+      let isTampered = false;
+      let tamperReason: string | undefined = undefined;
+
+      if (tamperInTransit) {
+        finalCiphertext = tamperCiphertext(encryptionResult.ciphertext).tamperedHex;
+        isTampered = true;
+        tamperReason = 'In-Flight Bit Mutation via Red Team MITM Suite';
+      }
+
+      const newPacket: EncryptedPacket = {
+        seq: nextSeq,
+        prev_hash: prevHash,
+        current_hash: currentHash,
+        iv: encryptionResult.iv,
+        ciphertext: finalCiphertext,
+        device_sig: deviceSig,
+        timestamp,
+        tampered: isTampered,
+        tamperReason,
+        originalCiphertext: encryptionResult.ciphertext,
+        originalHash: currentHash,
+      };
+
+      sounds.playTransmit();
+      setIsTransmitting(false);
+
+      // Stage packet in the Untrusted Relay / MITM Workbench
+      setStagedTransitPacket(newPacket);
+      setSelectedPacket(newPacket);
+
+      // If in Live Cruise mode or auto-forward requested, forward through transit immediately
+      if (autoForwardToConsignee) {
+        setTimeout(() => {
+          forwardPacketToConsignee(newPacket);
+        }, 200);
+      }
+
+      return newPacket;
+    },
+    [forwardPacketToConsignee]
+  );
+
+  /**
    * 4. Corrupt Bit & Forward action from MITM Workbench
    */
   const handleCorruptAndForward = useCallback(
@@ -533,7 +560,7 @@ export function App() {
    */
   const handleInjectReplay = useCallback(() => {
     if (packetHistory.length < 1) return;
-    const pastPacket = packetHistory[Math.max(0, packetHistory.length - 2)];
+    const pastPacket = packetHistory[Math.max(0, packetHistory.length - 2)] || packetHistory[0];
     const replayPacket: EncryptedPacket = {
       ...pastPacket,
       isReplay: true,
@@ -541,6 +568,151 @@ export function App() {
     };
     forwardPacketToConsignee(replayPacket);
   }, [packetHistory, forwardPacketToConsignee]);
+
+  /**
+   * Red Team Quick Scenario 1: MITM Ciphertext Tamper (Error 0x4B2)
+   */
+  const handleTriggerMitmTamperScenario = useCallback(async () => {
+    if (stagedTransitPacket) {
+      handleCorruptAndForward();
+    } else {
+      await handleTransmitPacket(true, undefined, true);
+    }
+  }, [stagedTransitPacket, handleCorruptAndForward, handleTransmitPacket]);
+
+  /**
+   * Red Team Quick Scenario 2: Replay Attack Injection (Error 0x3F1)
+   */
+  const handleTriggerReplayScenario = useCallback(async () => {
+    const history = stateRef.current.packetHistory;
+    if (history.length > 0) {
+      const pastPacket = history[Math.max(0, history.length - 2)] || history[0];
+      const replayPacket: EncryptedPacket = {
+        ...pastPacket,
+        isReplay: true,
+        tamperReason: `Red Team Replay Attack: Injected Expired Sequence #${pastPacket.seq}`,
+      };
+      await forwardPacketToConsignee(replayPacket);
+    } else {
+      const pkt = await handleTransmitPacket(true);
+      if (pkt) {
+        setTimeout(async () => {
+          const replayPacket: EncryptedPacket = {
+            ...pkt,
+            isReplay: true,
+            tamperReason: `Red Team Replay Attack: Injected Expired Sequence #${pkt.seq}`,
+          };
+          await forwardPacketToConsignee(replayPacket);
+        }, 300);
+      }
+    }
+  }, [forwardPacketToConsignee, handleTransmitPacket]);
+
+  /**
+   * Red Team Quick Scenario 3: Physical Seal Breach (Lux > 50, Error 0x99A)
+   */
+  const handleTriggerPhysicalBreachScenario = useCallback(async () => {
+    setLuxInput(940);
+    setShockInput(3.8);
+    await handleTransmitPacket(true, { lux: 940, shockG: 3.8, doorSealed: false });
+  }, [handleTransmitPacket]);
+
+  /**
+   * Red Team Quick Scenario 4: Cold-Chain Reefer Spoilage (+38.5°C)
+   */
+  const handleTriggerColdChainScenario = useCallback(async () => {
+    setTempInput(38.5);
+    await handleTransmitPacket(true, { temp: 38.5 });
+  }, [handleTransmitPacket]);
+
+  /**
+   * Red Team Quick Scenario 5: Zero-Knowledge Eavesdropper Test (0x10A_NO_KEY)
+   */
+  const handleTriggerZeroKnowledgeScenario = useCallback(async () => {
+    const currentlyLoaded = stateRef.current.isConsigneeKeyLoaded;
+    if (currentlyLoaded) {
+      setIsConsigneeKeyLoaded(false);
+      await handleTransmitPacket(true);
+    } else {
+      setIsConsigneeKeyLoaded(true);
+    }
+  }, [handleTransmitPacket]);
+
+  /**
+   * Red Team Quick Scenario 6: Clean Verified Telemetry Burst
+   */
+  const handleTriggerNormalBurstScenario = useCallback(async () => {
+    setTempInput(21.4);
+    setLuxInput(2);
+    setShockInput(0.05);
+    setIsConsigneeKeyLoaded(true);
+    await handleTransmitPacket(true, { temp: 21.4, lux: 2, shockG: 0.05, doorSealed: true });
+  }, [handleTransmitPacket]);
+
+  // Operational Keyboard Shortcuts Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Do not fire shortcuts if the user is typing inside an input, textarea, or select
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
+        return;
+      }
+
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        handleTriggerNormalBurstScenario();
+      } else if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        setIsCruiseMode((prev) => !prev);
+      } else if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        handleTriggerMitmTamperScenario();
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        handleTriggerReplayScenario();
+      } else if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        handleTriggerPhysicalBreachScenario();
+      } else if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        setIsConsigneeKeyLoaded((prev) => !prev);
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        setSoundEnabled((prev) => !prev);
+      } else if (e.key === '1') {
+        e.preventDefault();
+        setViewMode('split');
+      } else if (e.key === '2') {
+        e.preventDefault();
+        setViewMode('iot');
+      } else if (e.key === '3') {
+        e.preventDefault();
+        setViewMode('relay');
+      } else if (e.key === '4') {
+        e.preventDefault();
+        setViewMode('consignee');
+      } else if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        e.preventDefault();
+        setIsShortcutsModalOpen((prev) => !prev);
+      } else if (e.key === 'Escape') {
+        setIsShortcutsModalOpen(false);
+        setIsAuditModalOpen(false);
+        setActiveAlert(null);
+        setLastFailureDetails(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    handleTriggerNormalBurstScenario,
+    handleTriggerMitmTamperScenario,
+    handleTriggerReplayScenario,
+    handleTriggerPhysicalBreachScenario,
+  ]);
 
   /**
    * 6. Direct JSON Export of Cryptographic Audit Trail
@@ -599,7 +771,7 @@ export function App() {
     return () => {
       mounted = false;
     };
-  }, [initCrypto]);
+  }, [initCrypto, handleTransmitPacket]);
 
   // Live Cruise mode: Automatically emit every 3 seconds
   useEffect(() => {
@@ -620,6 +792,7 @@ export function App() {
         onSetViewMode={setViewMode}
         onResetVoyage={handleResetVoyage}
         onOpenAuditModal={() => setIsAuditModalOpen(true)}
+        onOpenShortcutsModal={() => setIsShortcutsModalOpen(true)}
         onExportAuditJSON={handleExportAuditJSON}
         soundEnabled={soundEnabled}
         onToggleSound={() => setSoundEnabled(!soundEnabled)}
@@ -628,11 +801,26 @@ export function App() {
         isKeyLoaded={isConsigneeKeyLoaded}
       />
 
+      {/* Red Team Attack Suite & Operational Launcher */}
+      <RedTeamToolbar
+        onTriggerMitmTamper={handleTriggerMitmTamperScenario}
+        onTriggerReplayAttack={handleTriggerReplayScenario}
+        onTriggerPhysicalBreach={handleTriggerPhysicalBreachScenario}
+        onTriggerColdChainSpike={handleTriggerColdChainScenario}
+        onTriggerZeroKnowledgeTest={handleTriggerZeroKnowledgeScenario}
+        onTriggerNormalBurst={handleTriggerNormalBurstScenario}
+        onOpenShortcutsModal={() => setIsShortcutsModalOpen(true)}
+        isTransmitting={isTransmitting}
+        activeAlert={activeAlert}
+        isKeyLoaded={isConsigneeKeyLoaded}
+        canReplay={packetHistory.length >= 1}
+      />
+
       {/* Main Content Area based on View Mode */}
-      <main className="flex-1 p-3 md:p-4 overflow-hidden">
+      <main className="flex-1 p-2.5 md:p-3 overflow-hidden flex flex-col">
         {/* VIEW 1: Split SOC View (Tri-Panel) */}
         {viewMode === 'split' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 md:gap-4 h-[calc(100vh-80px)]">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 md:gap-3 flex-1 min-h-0">
             {/* Left Panel: IoT Edge Transmitter (3 cols) */}
             <div className="lg:col-span-3 h-full flex flex-col">
               <LeftPanelIoT
@@ -697,7 +885,7 @@ export function App() {
 
         {/* VIEW 2: IoT Edge Terminal Only */}
         {viewMode === 'iot' && (
-          <div className="max-w-4xl mx-auto h-[calc(100vh-80px)]">
+          <div className="max-w-4xl w-full mx-auto flex-1 min-h-0">
             <LeftPanelIoT
               currentTelemetry={currentTelemetry}
               latestPacket={packetHistory[packetHistory.length - 1] || null}
@@ -727,7 +915,7 @@ export function App() {
 
         {/* VIEW 3: Cloud Interceptor / MITM Workbench Only */}
         {viewMode === 'relay' && (
-          <div className="max-w-5xl mx-auto h-[calc(100vh-80px)]">
+          <div className="max-w-5xl w-full mx-auto flex-1 min-h-0">
             <CenterPanelRelay
               packetHistory={packetHistory}
               selectedPacket={selectedPacket}
@@ -742,7 +930,7 @@ export function App() {
 
         {/* VIEW 4: Consignee Portal Only */}
         {viewMode === 'consignee' && (
-          <div className="max-w-6xl mx-auto h-[calc(100vh-80px)]">
+          <div className="max-w-6xl w-full mx-auto flex-1 min-h-0">
             <RightPanelConsignee
               logs={consigneeLogs}
               latestVerifiedTelemetry={latestVerifiedTelemetry}
@@ -769,6 +957,12 @@ export function App() {
         logs={consigneeLogs}
         cryptoKeys={cryptoKeys}
         genesisHash={GENESIS_HASH}
+      />
+
+      {/* Keyboard Shortcuts Modal */}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => setIsShortcutsModalOpen(false)}
       />
     </div>
   );
